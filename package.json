@@ -12,11 +12,11 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
-    "konva": "^10.0.12",
+    "konva": "^9.3.0",
     "lucide-react": "^0.344.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-konva": "^19.2.1",
+    "react-konva": "^18.2.10",
     "react-router-dom": "^7.10.1"
   },
   "devDependencies": {

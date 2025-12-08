@@ -6,7 +6,7 @@ import { Login } from './pages/Login';
 import { Signup } from './pages/Signup';
 import { Dashboard } from './pages/Dashboard';
 import { SubjectView } from './pages/SubjectView';
-import { NoteEditor } from './pages/NoteEditor';
+import { NoteEditorEnhanced } from './pages/NoteEditorEnhanced';
 import { SharedNote } from './pages/SharedNote';
 
 function App() {
@@ -37,7 +37,7 @@ function App() {
             path="/note/:noteId"
             element={
               <ProtectedRoute>
-                <NoteEditor />
+                <NoteEditorEnhanced />
               </ProtectedRoute>
             }
           />
