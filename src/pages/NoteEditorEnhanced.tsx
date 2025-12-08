@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Stage, Layer, Line, Rect, Circle, Text as KonvaText, Arrow, Transformer } from 'react-konva';
+import { Stage, Layer, Line, Rect, Circle, Text as KonvaText, Arrow, Transformer, Ellipse } from 'react-konva';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import {
@@ -20,8 +20,6 @@ import {
   Moon,
   Sun,
   Move,
-  Plus,
-  Minus,
   Bold,
   Italic,
   Underline as UnderlineIcon,
@@ -32,18 +30,20 @@ import {
 import Konva from 'konva';
 
 type Tool = 'pen' | 'highlighter' | 'text' | 'shape' | 'eraser' | 'select';
-type ShapeType = 'rectangle' | 'circle' | 'triangle' | 'arrow' | 'line' | 'square';
+type ShapeType = 'rectangle' | 'circle' | 'triangle' | 'arrow' | 'line' | 'square' | 'ellipse';
 type TextAlign = 'left' | 'center' | 'right';
 
 interface DrawObject {
   id: string;
-  type: 'line' | 'rect' | 'circle' | 'text' | 'arrow' | 'triangle' | 'straightline';
+  type: 'line' | 'rect' | 'circle' | 'text' | 'arrow' | 'triangle' | 'straightline' | 'ellipse';
   points?: number[];
   x?: number;
   y?: number;
   width?: number;
   height?: number;
   radius?: number;
+  radiusX?: number;
+  radiusY?: number;
   fill?: string;
   stroke?: string;
   strokeWidth?: number;
@@ -96,7 +96,8 @@ export function NoteEditorEnhanced() {
   const [darkMode, setDarkMode] = useState(false);
   const [textBox, setTextBox] = useState<TextBox | null>(null);
   const [textValue, setTextValue] = useState('');
-  const [isResizingText, setIsResizingText] = useState(false);
+  const [isDrawingLine, setIsDrawingLine] = useState(false);
+  const [tempLineStart, setTempLineStart] = useState<{ x: number; y: number } | null>(null);
   const stageRef = useRef<any>(null);
   const transformerRef = useRef<Konva.Transformer | null>(null);
   const textInputRef = useRef<HTMLTextAreaElement>(null);
@@ -254,23 +255,31 @@ export function NoteEditorEnhanced() {
     }
 
     if (tool === 'shape') {
+      // Special handling for line - user needs to drag to create
+      if (selectedShape === 'line') {
+        setIsDrawingLine(true);
+        setTempLineStart({ x: point.x, y: point.y });
+        return;
+      }
+
       const newShape: DrawObject = {
         id: `shape-${Date.now()}`,
         type: selectedShape === 'square' || selectedShape === 'rectangle' ? 'rect' :
               selectedShape === 'circle' ? 'circle' :
+              selectedShape === 'ellipse' ? 'ellipse' :
               selectedShape === 'triangle' ? 'triangle' :
-              selectedShape === 'arrow' ? 'arrow' : 
-              selectedShape === 'line' ? 'straightline' : 'line',
+              selectedShape === 'arrow' ? 'arrow' : 'line',
         x: point.x,
         y: point.y,
         width: selectedShape === 'square' ? 100 : selectedShape === 'rectangle' ? 150 : undefined,
         height: selectedShape === 'square' ? 100 : selectedShape === 'rectangle' ? 100 : undefined,
         radius: selectedShape === 'circle' ? 50 : undefined,
+        radiusX: selectedShape === 'ellipse' ? 75 : undefined,
+        radiusY: selectedShape === 'ellipse' ? 50 : undefined,
         stroke: strokeColor,
         strokeWidth,
         fill: fillColor,
         points: selectedShape === 'arrow' ? [0, 0, 100, 0] :
-                selectedShape === 'line' ? [0, 0, 100, 0] :
                 selectedShape === 'triangle' ? [0, -50, 50, 50, -50, 50] : undefined,
         draggable: true,
       };
@@ -298,6 +307,34 @@ export function NoteEditorEnhanced() {
   };
 
   const handleMouseMove = (e: any) => {
+    // Handle line drawing in shape mode
+    if (isDrawingLine && tempLineStart) {
+      const stage = e.target.getStage();
+      const point = stage.getPointerPosition();
+      
+      // Update or create temp line preview
+      const tempLineId = 'temp-line-preview';
+      const existingTempLine = objects.find(obj => obj.id === tempLineId);
+      
+      const tempLine: DrawObject = {
+        id: tempLineId,
+        type: 'straightline',
+        x: tempLineStart.x,
+        y: tempLineStart.y,
+        points: [0, 0, point.x - tempLineStart.x, point.y - tempLineStart.y],
+        stroke: strokeColor,
+        strokeWidth,
+        draggable: false,
+      };
+
+      if (existingTempLine) {
+        setObjects(objects.map(obj => obj.id === tempLineId ? tempLine : obj));
+      } else {
+        setObjects([...objects, tempLine]);
+      }
+      return;
+    }
+
     if (!isDrawing || tool === 'shape' || tool === 'text' || tool === 'select') return;
 
     const stage = e.target.getStage();
@@ -315,7 +352,37 @@ export function NoteEditorEnhanced() {
     }
   };
 
-  const handleMouseUp = () => {
+  const handleMouseUp = (e: any) => {
+    // Complete line drawing
+    if (isDrawingLine && tempLineStart) {
+      const stage = e.target.getStage();
+      const point = stage.getPointerPosition();
+      
+      // Remove temp preview line
+      const filteredObjects = objects.filter(obj => obj.id !== 'temp-line-preview');
+      
+      // Create final line
+      const newLine: DrawObject = {
+        id: `line-${Date.now()}`,
+        type: 'straightline',
+        x: tempLineStart.x,
+        y: tempLineStart.y,
+        points: [0, 0, point.x - tempLineStart.x, point.y - tempLineStart.y],
+        stroke: strokeColor,
+        strokeWidth,
+        draggable: true,
+      };
+
+      const newObjects = [...filteredObjects, newLine];
+      setObjects(newObjects);
+      addToHistory(newObjects);
+      setIsDrawingLine(false);
+      setTempLineStart(null);
+      setSelectedId(newLine.id);
+      setTool('select');
+      return;
+    }
+
     if (isDrawing) {
       addToHistory(objects);
     }
@@ -574,6 +641,17 @@ export function NoteEditorEnhanced() {
                     <CircleIcon className="w-6 h-6 mx-auto" />
                   </button>
                   <button
+                    onClick={() => setSelectedShape('ellipse')}
+                    className={`p-3 rounded-lg border-2 transition ${
+                      selectedShape === 'ellipse'
+                        ? 'border-blue-600 bg-blue-50'
+                        : `${borderColor} hover:border-gray-300`
+                    }`}
+                    title="Ellipse"
+                  >
+                    <div className="w-8 h-5 border-2 border-current rounded-full mx-auto" />
+                  </button>
+                  <button
                     onClick={() => setSelectedShape('triangle')}
                     className={`p-3 rounded-lg border-2 transition ${
                       selectedShape === 'triangle'
@@ -733,7 +811,7 @@ export function NoteEditorEnhanced() {
                   <input
                     type="range"
                     min="0.5"
-                    max="10"
+                    max="15"
                     step="0.5"
                     value={strokeWidth}
                     onChange={(e) => setStrokeWidth(Number(e.target.value))}
@@ -768,6 +846,83 @@ export function NoteEditorEnhanced() {
                     </button>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* Selected Object Properties - Live Editing */}
+            {tool === 'select' && selectedId && getSelectedObject() && (
+              <div className="space-y-4 border-t pt-4 mt-4">
+                <h3 className={`text-sm font-semibold ${textColor} mb-3`}>Selected Object Properties</h3>
+                
+                {/* Show fill color for shapes (not for lines or text) */}
+                {(getSelectedObject()?.type === 'rect' || 
+                  getSelectedObject()?.type === 'circle' || 
+                  getSelectedObject()?.type === 'ellipse' ||
+                  getSelectedObject()?.type === 'triangle') && (
+                  <div>
+                    <h3 className={`text-sm font-semibold ${textColor} mb-3`}>Fill Color</h3>
+                    <div className="flex space-x-2">
+                      <input
+                        type="color"
+                        value={getSelectedObject()?.fill === 'transparent' ? '#ffffff' : (getSelectedObject()?.fill || '#ffffff')}
+                        onChange={(e) => updateSelectedObject('fill', e.target.value)}
+                        className="flex-1 h-10 rounded-lg cursor-pointer"
+                      />
+                      <button
+                        onClick={() => updateSelectedObject('fill', 'transparent')}
+                        className={`px-3 py-2 rounded-lg border-2 transition ${
+                          getSelectedObject()?.fill === 'transparent' ? 'border-blue-600 bg-blue-50' : `${borderColor} ${hoverBg}`
+                        }`}
+                      >
+                        None
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Show stroke color for shapes and lines */}
+                {(getSelectedObject()?.type !== 'text') && (
+                  <div>
+                    <h3 className={`text-sm font-semibold ${textColor} mb-3`}>Border/Line Color</h3>
+                    <input
+                      type="color"
+                      value={getSelectedObject()?.stroke || '#000000'}
+                      onChange={(e) => updateSelectedObject('stroke', e.target.value)}
+                      className="w-full h-10 rounded-lg cursor-pointer"
+                    />
+                  </div>
+                )}
+
+                {/* Show stroke width for shapes and lines */}
+                {(getSelectedObject()?.type !== 'text') && (
+                  <div>
+                    <h3 className={`text-sm font-semibold ${textColor} mb-3`}>
+                      Border Thickness: {getSelectedObject()?.strokeWidth || 2}px
+                    </h3>
+                    <input
+                      type="range"
+                      min="0.5"
+                      max="15"
+                      step="0.5"
+                      value={getSelectedObject()?.strokeWidth || 2}
+                      onChange={(e) => updateSelectedObject('strokeWidth', Number(e.target.value))}
+                      className="w-full"
+                    />
+                  </div>
+                )}
+
+                {/* Show text color for text objects */}
+                {getSelectedObject()?.type === 'text' && (
+                  <div>
+                    <h3 className={`text-sm font-semibold ${textColor} mb-3`}>Text Color</h3>
+                    <input
+                      type="color"
+                      value={getSelectedObject()?.fill || '#000000'}
+                      onChange={(e) => updateSelectedObject('fill', e.target.value)}
+                      className="w-full h-10 rounded-lg cursor-pointer"
+                    />
+                  </div>
+                )}
               </div>
             )}
 
@@ -833,6 +988,16 @@ export function NoteEditorEnhanced() {
                         fill={obj.fill}
                         draggable={obj.draggable || tool === 'select'}
                         onClick={() => tool === 'select' && setSelectedId(obj.id)}
+                        onDragEnd={(e) => {
+                          const newObjects = objects.map(o => {
+                            if (o.id === obj.id) {
+                              return { ...o, x: e.target.x(), y: e.target.y() };
+                            }
+                            return o;
+                          });
+                          setObjects(newObjects);
+                          addToHistory(newObjects);
+                        }}
                       />
                     );
                   }
@@ -849,6 +1014,16 @@ export function NoteEditorEnhanced() {
                         fill={obj.fill}
                         draggable={obj.draggable || tool === 'select'}
                         onClick={() => tool === 'select' && setSelectedId(obj.id)}
+                        onDragEnd={(e) => {
+                          const newObjects = objects.map(o => {
+                            if (o.id === obj.id) {
+                              return { ...o, x: e.target.x(), y: e.target.y() };
+                            }
+                            return o;
+                          });
+                          setObjects(newObjects);
+                          addToHistory(newObjects);
+                        }}
                       />
                     );
                   }
@@ -869,6 +1044,16 @@ export function NoteEditorEnhanced() {
                         align={obj.align}
                         draggable={obj.draggable || tool === 'select'}
                         onClick={() => tool === 'select' && setSelectedId(obj.id)}
+                        onDragEnd={(e) => {
+                          const newObjects = objects.map(o => {
+                            if (o.id === obj.id) {
+                              return { ...o, x: e.target.x(), y: e.target.y() };
+                            }
+                            return o;
+                          });
+                          setObjects(newObjects);
+                          addToHistory(newObjects);
+                        }}
                       />
                     );
                   }
@@ -887,6 +1072,16 @@ export function NoteEditorEnhanced() {
                         pointerWidth={10}
                         draggable={obj.draggable || tool === 'select'}
                         onClick={() => tool === 'select' && setSelectedId(obj.id)}
+                        onDragEnd={(e) => {
+                          const newObjects = objects.map(o => {
+                            if (o.id === obj.id) {
+                              return { ...o, x: e.target.x(), y: e.target.y() };
+                            }
+                            return o;
+                          });
+                          setObjects(newObjects);
+                          addToHistory(newObjects);
+                        }}
                       />
                     );
                   }
@@ -904,6 +1099,95 @@ export function NoteEditorEnhanced() {
                         closed
                         draggable={obj.draggable || tool === 'select'}
                         onClick={() => tool === 'select' && setSelectedId(obj.id)}
+                        onDragEnd={(e) => {
+                          const newObjects = objects.map(o => {
+                            if (o.id === obj.id) {
+                              return { ...o, x: e.target.x(), y: e.target.y() };
+                            }
+                            return o;
+                          });
+                          setObjects(newObjects);
+                          addToHistory(newObjects);
+                        }}
+                      />
+                    );
+                  }
+                  if (obj.type === 'straightline' && obj.points) {
+                    return (
+                      <Line
+                        key={obj.id}
+                        id={obj.id}
+                        x={obj.x}
+                        y={obj.y}
+                        points={obj.points}
+                        stroke={obj.stroke}
+                        strokeWidth={obj.strokeWidth}
+                        lineCap="round"
+                        draggable={obj.draggable || tool === 'select'}
+                        onClick={() => tool === 'select' && setSelectedId(obj.id)}
+                        onDragEnd={(e) => {
+                          const newObjects = objects.map(o => {
+                            if (o.id === obj.id) {
+                              return { ...o, x: e.target.x(), y: e.target.y() };
+                            }
+                            return o;
+                          });
+                          setObjects(newObjects);
+                          addToHistory(newObjects);
+                        }}
+                        onTransformEnd={(e) => {
+                          const node = e.target;
+                          const scaleX = node.scaleX();
+                          const scaleY = node.scaleY();
+                          
+                          node.scaleX(1);
+                          node.scaleY(1);
+                          
+                          const newObjects = objects.map(o => {
+                            if (o.id === obj.id && o.points) {
+                              const newPoints = o.points.map((point, index) => {
+                                return index % 2 === 0 ? point * scaleX : point * scaleY;
+                              });
+                              return {
+                                ...o,
+                                x: node.x(),
+                                y: node.y(),
+                                points: newPoints,
+                                strokeWidth: Math.max(0.5, (o.strokeWidth || 2) * Math.max(scaleX, scaleY)),
+                              };
+                            }
+                            return o;
+                          });
+                          setObjects(newObjects);
+                          addToHistory(newObjects);
+                        }}
+                      />
+                    );
+                  }
+                  if (obj.type === 'ellipse') {
+                    return (
+                      <Ellipse
+                        key={obj.id}
+                        id={obj.id}
+                        x={obj.x}
+                        y={obj.y}
+                        radiusX={obj.radiusX || 75}
+                        radiusY={obj.radiusY || 50}
+                        stroke={obj.stroke}
+                        strokeWidth={obj.strokeWidth}
+                        fill={obj.fill}
+                        draggable={obj.draggable || tool === 'select'}
+                        onClick={() => tool === 'select' && setSelectedId(obj.id)}
+                        onDragEnd={(e) => {
+                          const newObjects = objects.map(o => {
+                            if (o.id === obj.id) {
+                              return { ...o, x: e.target.x(), y: e.target.y() };
+                            }
+                            return o;
+                          });
+                          setObjects(newObjects);
+                          addToHistory(newObjects);
+                        }}
                       />
                     );
                   }
@@ -963,7 +1247,6 @@ export function NoteEditorEnhanced() {
                   className="absolute bottom-0 right-0 w-4 h-4 bg-blue-500 cursor-nwse-resize"
                   onMouseDown={(e) => {
                     e.stopPropagation();
-                    setIsResizingText(true);
                     const startX = e.clientX;
                     const startY = e.clientY;
                     const startWidth = textBox.width;
@@ -980,7 +1263,6 @@ export function NoteEditorEnhanced() {
                     };
 
                     const handleMouseUp = () => {
-                      setIsResizingText(false);
                       document.removeEventListener('mousemove', handleMouseMove);
                       document.removeEventListener('mouseup', handleMouseUp);
                     };
