@@ -99,6 +99,13 @@ export function NoteEditorEnhanced() {
   const [isDrawingLine, setIsDrawingLine] = useState(false);
   const [tempLineStart, setTempLineStart] = useState<{ x: number; y: number } | null>(null);
   
+  // New states for drag-to-draw shapes and text
+  const [isDrawingShape, setIsDrawingShape] = useState(false);
+  const [tempShapeStart, setTempShapeStart] = useState<{ x: number; y: number } | null>(null);
+  const [isDrawingTextBox, setIsDrawingTextBox] = useState(false);
+  const [tempTextBoxStart, setTempTextBoxStart] = useState<{ x: number; y: number } | null>(null);
+  const [eraserCursor, setEraserCursor] = useState<{ x: number; y: number } | null>(null);
+  
   // New states for infinite canvas and pan
   const [zoom, setZoom] = useState(1);
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
@@ -307,6 +314,96 @@ export function NoteEditorEnhanced() {
     setStagePos(newPos);
   };
 
+  // Helper function to check if a point is near an object (for eraser)
+  const isPointNearObject = (point: { x: number; y: number }, obj: DrawObject, eraserWidth: number): boolean => {
+    const threshold = eraserWidth / 2;
+
+    if (obj.type === 'line' && obj.points) {
+      // Check if point is near any line segment
+      for (let i = 0; i < obj.points.length - 2; i += 2) {
+        const x1 = obj.points[i];
+        const y1 = obj.points[i + 1];
+        const x2 = obj.points[i + 2];
+        const y2 = obj.points[i + 3];
+        
+        const distance = distanceToLineSegment(point, { x: x1, y: y1 }, { x: x2, y: y2 });
+        if (distance < threshold) return true;
+      }
+      return false;
+    }
+
+    if (obj.type === 'rect' && obj.x !== undefined && obj.y !== undefined && obj.width && obj.height) {
+      return (
+        point.x >= obj.x - threshold &&
+        point.x <= obj.x + obj.width + threshold &&
+        point.y >= obj.y - threshold &&
+        point.y <= obj.y + obj.height + threshold
+      );
+    }
+
+    if (obj.type === 'circle' && obj.x !== undefined && obj.y !== undefined && obj.radius) {
+      const distance = Math.sqrt(Math.pow(point.x - obj.x, 2) + Math.pow(point.y - obj.y, 2));
+      return distance <= obj.radius + threshold;
+    }
+
+    if (obj.type === 'ellipse' && obj.x !== undefined && obj.y !== undefined && obj.radiusX && obj.radiusY) {
+      const dx = point.x - obj.x;
+      const dy = point.y - obj.y;
+      const distance = Math.sqrt(Math.pow(dx / obj.radiusX, 2) + Math.pow(dy / obj.radiusY, 2));
+      return distance <= 1 + threshold / Math.max(obj.radiusX, obj.radiusY);
+    }
+
+    if (obj.type === 'text' && obj.x !== undefined && obj.y !== undefined && obj.width) {
+      const estimatedHeight = (obj.fontSize || 16) * 1.2;
+      return (
+        point.x >= obj.x - threshold &&
+        point.x <= obj.x + obj.width + threshold &&
+        point.y >= obj.y - threshold &&
+        point.y <= obj.y + estimatedHeight + threshold
+      );
+    }
+
+    if ((obj.type === 'arrow' || obj.type === 'triangle' || obj.type === 'straightline') && obj.x !== undefined && obj.y !== undefined && obj.points) {
+      // Check if point is near the shape bounds
+      const minX = Math.min(...obj.points.filter((_, i) => i % 2 === 0)) + obj.x;
+      const maxX = Math.max(...obj.points.filter((_, i) => i % 2 === 0)) + obj.x;
+      const minY = Math.min(...obj.points.filter((_, i) => i % 2 === 1)) + obj.y;
+      const maxY = Math.max(...obj.points.filter((_, i) => i % 2 === 1)) + obj.y;
+      
+      return (
+        point.x >= minX - threshold &&
+        point.x <= maxX + threshold &&
+        point.y >= minY - threshold &&
+        point.y <= maxY + threshold
+      );
+    }
+
+    return false;
+  };
+
+  // Helper function to calculate distance from point to line segment
+  const distanceToLineSegment = (
+    point: { x: number; y: number },
+    lineStart: { x: number; y: number },
+    lineEnd: { x: number; y: number }
+  ): number => {
+    const dx = lineEnd.x - lineStart.x;
+    const dy = lineEnd.y - lineStart.y;
+    const length = Math.sqrt(dx * dx + dy * dy);
+    
+    if (length === 0) {
+      return Math.sqrt(Math.pow(point.x - lineStart.x, 2) + Math.pow(point.y - lineStart.y, 2));
+    }
+    
+    let t = ((point.x - lineStart.x) * dx + (point.y - lineStart.y) * dy) / (length * length);
+    t = Math.max(0, Math.min(1, t));
+    
+    const projX = lineStart.x + t * dx;
+    const projY = lineStart.y + t * dy;
+    
+    return Math.sqrt(Math.pow(point.x - projX, 2) + Math.pow(point.y - projY, 2));
+  };
+
   const handleMouseDown = (e: any) => {
     const stage = e.target.getStage();
     const point = stage.getPointerPosition();
@@ -370,15 +467,9 @@ export function NoteEditorEnhanced() {
     }
 
     if (tool === 'text') {
-      setTextBox({
-        id: `textbox-${Date.now()}`,
-        x: relativePoint.x,
-        y: relativePoint.y,
-        width: 200,
-        height: 100,
-      });
-      setTextValue('');
-      setTimeout(() => textInputRef.current?.focus(), 100);
+      // Start drag-to-create text box
+      setIsDrawingTextBox(true);
+      setTempTextBoxStart(relativePoint);
       return;
     }
 
@@ -389,48 +480,40 @@ export function NoteEditorEnhanced() {
         return;
       }
 
-      const newShape: DrawObject = {
-        id: `shape-${Date.now()}`,
-        type: selectedShape === 'square' || selectedShape === 'rectangle' ? 'rect' :
-              selectedShape === 'circle' ? 'circle' :
-              selectedShape === 'ellipse' ? 'ellipse' :
-              selectedShape === 'triangle' ? 'triangle' :
-              selectedShape === 'arrow' ? 'arrow' : 'line',
-        x: relativePoint.x,
-        y: relativePoint.y,
-        width: selectedShape === 'square' ? 100 : selectedShape === 'rectangle' ? 150 : undefined,
-        height: selectedShape === 'square' ? 100 : selectedShape === 'rectangle' ? 100 : undefined,
-        radius: selectedShape === 'circle' ? 50 : undefined,
-        radiusX: selectedShape === 'ellipse' ? 75 : undefined,
-        radiusY: selectedShape === 'ellipse' ? 50 : undefined,
-        stroke: strokeColor,
-        strokeWidth,
-        fill: fillColor,
-        points: selectedShape === 'arrow' ? [0, 0, 100, 0] :
-                selectedShape === 'triangle' ? [0, -50, 50, 50, -50, 50] : undefined,
-        draggable: true,
-      };
+      // Start drag-to-draw shape
+      setIsDrawingShape(true);
+      setTempShapeStart(relativePoint);
+      return;
+    }
 
-      const newObjects = [...objects, newShape];
-      setObjects(newObjects);
-      addToHistory(newObjects);
-      setSelectedId(newShape.id);
-      setTool('select');
+    // Handle eraser - object-level erasing
+    if (tool === 'eraser') {
+      const eraserWidth = 20;
+      const objectsToRemove = objects.filter(obj => 
+        isPointNearObject(relativePoint, obj, eraserWidth)
+      );
+      
+      if (objectsToRemove.length > 0) {
+        const remainingObjects = objects.filter(obj => 
+          !objectsToRemove.some(removeObj => removeObj.id === obj.id)
+        );
+        setObjects(remainingObjects);
+      }
+      
+      setIsDrawing(true);
       return;
     }
 
     setIsDrawing(true);
 
-    const drawColor = tool === 'eraser' 
-      ? (darkMode ? '#0f0f0f' : '#ffffff') 
-      : color;
+    const drawColor = color;
 
     const newLine: DrawObject = {
       id: `line-${Date.now()}`,
       type: 'line',
       points: [relativePoint.x, relativePoint.y],
       stroke: drawColor,
-      strokeWidth: tool === 'eraser' ? 20 : strokeWidth,
+      strokeWidth: strokeWidth,
       opacity: tool === 'highlighter' ? 0.5 : 1,
     };
 
@@ -460,6 +543,136 @@ export function NoteEditorEnhanced() {
       y: (point.y - stagePos.y) / zoom,
     };
 
+    // Update eraser cursor position
+    if (tool === 'eraser') {
+      setEraserCursor(relativePoint);
+    } else {
+      setEraserCursor(null);
+    }
+
+    // Handle text box drag-to-create
+    if (isDrawingTextBox && tempTextBoxStart) {
+      const width = Math.abs(relativePoint.x - tempTextBoxStart.x);
+      const height = Math.abs(relativePoint.y - tempTextBoxStart.y);
+      const x = Math.min(tempTextBoxStart.x, relativePoint.x);
+      const y = Math.min(tempTextBoxStart.y, relativePoint.y);
+      
+      setTextBox({
+        id: `textbox-${Date.now()}`,
+        x,
+        y,
+        width: Math.max(width, 50),
+        height: Math.max(height, 30),
+      });
+      return;
+    }
+
+    // Handle shape drag-to-draw
+    if (isDrawingShape && tempShapeStart) {
+      const tempShapeId = 'temp-shape-preview';
+      const existingTempShape = objects.find(obj => obj.id === tempShapeId);
+      
+      const width = Math.abs(relativePoint.x - tempShapeStart.x);
+      const height = Math.abs(relativePoint.y - tempShapeStart.y);
+      const x = Math.min(tempShapeStart.x, relativePoint.x);
+      const y = Math.min(tempShapeStart.y, relativePoint.y);
+
+      let tempShape: DrawObject;
+
+      if (selectedShape === 'square') {
+        const size = Math.max(width, height);
+        tempShape = {
+          id: tempShapeId,
+          type: 'rect',
+          x,
+          y,
+          width: size,
+          height: size,
+          stroke: strokeColor,
+          strokeWidth,
+          fill: fillColor,
+          draggable: false,
+        };
+      } else if (selectedShape === 'rectangle') {
+        tempShape = {
+          id: tempShapeId,
+          type: 'rect',
+          x,
+          y,
+          width,
+          height,
+          stroke: strokeColor,
+          strokeWidth,
+          fill: fillColor,
+          draggable: false,
+        };
+      } else if (selectedShape === 'circle') {
+        const radius = Math.max(width, height) / 2;
+        tempShape = {
+          id: tempShapeId,
+          type: 'circle',
+          x: tempShapeStart.x + (relativePoint.x > tempShapeStart.x ? radius : -radius),
+          y: tempShapeStart.y + (relativePoint.y > tempShapeStart.y ? radius : -radius),
+          radius,
+          stroke: strokeColor,
+          strokeWidth,
+          fill: fillColor,
+          draggable: false,
+        };
+      } else if (selectedShape === 'ellipse') {
+        tempShape = {
+          id: tempShapeId,
+          type: 'ellipse',
+          x: tempShapeStart.x + (relativePoint.x - tempShapeStart.x) / 2,
+          y: tempShapeStart.y + (relativePoint.y - tempShapeStart.y) / 2,
+          radiusX: Math.abs(relativePoint.x - tempShapeStart.x) / 2,
+          radiusY: Math.abs(relativePoint.y - tempShapeStart.y) / 2,
+          stroke: strokeColor,
+          strokeWidth,
+          fill: fillColor,
+          draggable: false,
+        };
+      } else if (selectedShape === 'triangle') {
+        const centerX = (tempShapeStart.x + relativePoint.x) / 2;
+        tempShape = {
+          id: tempShapeId,
+          type: 'triangle',
+          x: centerX,
+          y: tempShapeStart.y,
+          points: [
+            0, 0,
+            (relativePoint.x - tempShapeStart.x) / 2, relativePoint.y - tempShapeStart.y,
+            -(relativePoint.x - tempShapeStart.x) / 2, relativePoint.y - tempShapeStart.y
+          ],
+          stroke: strokeColor,
+          strokeWidth,
+          fill: fillColor,
+          draggable: false,
+        };
+      } else if (selectedShape === 'arrow') {
+        tempShape = {
+          id: tempShapeId,
+          type: 'arrow',
+          x: tempShapeStart.x,
+          y: tempShapeStart.y,
+          points: [0, 0, relativePoint.x - tempShapeStart.x, relativePoint.y - tempShapeStart.y],
+          stroke: strokeColor,
+          strokeWidth,
+          fill: strokeColor,
+          draggable: false,
+        };
+      } else {
+        return;
+      }
+
+      if (existingTempShape) {
+        setObjects(objects.map(obj => obj.id === tempShapeId ? tempShape : obj));
+      } else {
+        setObjects([...objects, tempShape]);
+      }
+      return;
+    }
+
     // Handle line drawing in shape mode
     if (isDrawingLine && tempLineStart) {
       const tempLineId = 'temp-line-preview';
@@ -480,6 +693,22 @@ export function NoteEditorEnhanced() {
         setObjects(objects.map(obj => obj.id === tempLineId ? tempLine : obj));
       } else {
         setObjects([...objects, tempLine]);
+      }
+      return;
+    }
+
+    // Handle eraser movement
+    if (isDrawing && tool === 'eraser') {
+      const eraserWidth = 20;
+      const objectsToRemove = objects.filter(obj => 
+        isPointNearObject(relativePoint, obj, eraserWidth)
+      );
+      
+      if (objectsToRemove.length > 0) {
+        const remainingObjects = objects.filter(obj => 
+          !objectsToRemove.some(removeObj => removeObj.id === obj.id)
+        );
+        setObjects(remainingObjects);
       }
       return;
     }
@@ -520,6 +749,135 @@ export function NoteEditorEnhanced() {
       y: (point.y - stagePos.y) / zoom,
     };
 
+    // Complete text box creation
+    if (isDrawingTextBox && tempTextBoxStart) {
+      setIsDrawingTextBox(false);
+      setTempTextBoxStart(null);
+      
+      if (textBox) {
+        setTextValue('');
+        setTimeout(() => textInputRef.current?.focus(), 100);
+      }
+      return;
+    }
+
+    // Complete shape drawing
+    if (isDrawingShape && tempShapeStart) {
+      const filteredObjects = objects.filter(obj => obj.id !== 'temp-shape-preview');
+      
+      const width = Math.abs(relativePoint.x - tempShapeStart.x);
+      const height = Math.abs(relativePoint.y - tempShapeStart.y);
+      const x = Math.min(tempShapeStart.x, relativePoint.x);
+      const y = Math.min(tempShapeStart.y, relativePoint.y);
+
+      // Only create shape if dragged enough (min 10 pixels)
+      if (width < 10 && height < 10) {
+        setObjects(filteredObjects);
+        setIsDrawingShape(false);
+        setTempShapeStart(null);
+        return;
+      }
+
+      let newShape: DrawObject;
+
+      if (selectedShape === 'square') {
+        const size = Math.max(width, height);
+        newShape = {
+          id: `shape-${Date.now()}`,
+          type: 'rect',
+          x,
+          y,
+          width: size,
+          height: size,
+          stroke: strokeColor,
+          strokeWidth,
+          fill: fillColor,
+          draggable: true,
+        };
+      } else if (selectedShape === 'rectangle') {
+        newShape = {
+          id: `shape-${Date.now()}`,
+          type: 'rect',
+          x,
+          y,
+          width,
+          height,
+          stroke: strokeColor,
+          strokeWidth,
+          fill: fillColor,
+          draggable: true,
+        };
+      } else if (selectedShape === 'circle') {
+        const radius = Math.max(width, height) / 2;
+        newShape = {
+          id: `shape-${Date.now()}`,
+          type: 'circle',
+          x: tempShapeStart.x + (relativePoint.x > tempShapeStart.x ? radius : -radius),
+          y: tempShapeStart.y + (relativePoint.y > tempShapeStart.y ? radius : -radius),
+          radius,
+          stroke: strokeColor,
+          strokeWidth,
+          fill: fillColor,
+          draggable: true,
+        };
+      } else if (selectedShape === 'ellipse') {
+        newShape = {
+          id: `shape-${Date.now()}`,
+          type: 'ellipse',
+          x: tempShapeStart.x + (relativePoint.x - tempShapeStart.x) / 2,
+          y: tempShapeStart.y + (relativePoint.y - tempShapeStart.y) / 2,
+          radiusX: Math.abs(relativePoint.x - tempShapeStart.x) / 2,
+          radiusY: Math.abs(relativePoint.y - tempShapeStart.y) / 2,
+          stroke: strokeColor,
+          strokeWidth,
+          fill: fillColor,
+          draggable: true,
+        };
+      } else if (selectedShape === 'triangle') {
+        const centerX = (tempShapeStart.x + relativePoint.x) / 2;
+        newShape = {
+          id: `shape-${Date.now()}`,
+          type: 'triangle',
+          x: centerX,
+          y: tempShapeStart.y,
+          points: [
+            0, 0,
+            (relativePoint.x - tempShapeStart.x) / 2, relativePoint.y - tempShapeStart.y,
+            -(relativePoint.x - tempShapeStart.x) / 2, relativePoint.y - tempShapeStart.y
+          ],
+          stroke: strokeColor,
+          strokeWidth,
+          fill: fillColor,
+          draggable: true,
+        };
+      } else if (selectedShape === 'arrow') {
+        newShape = {
+          id: `shape-${Date.now()}`,
+          type: 'arrow',
+          x: tempShapeStart.x,
+          y: tempShapeStart.y,
+          points: [0, 0, relativePoint.x - tempShapeStart.x, relativePoint.y - tempShapeStart.y],
+          stroke: strokeColor,
+          strokeWidth,
+          fill: strokeColor,
+          draggable: true,
+        };
+      } else {
+        setIsDrawingShape(false);
+        setTempShapeStart(null);
+        return;
+      }
+
+      const newObjects = [...filteredObjects, newShape];
+      setObjects(newObjects);
+      addToHistory(newObjects);
+      setIsDrawingShape(false);
+      setTempShapeStart(null);
+      setSelectedId(newShape.id);
+      setTool('select');
+      return;
+    }
+
     // Complete line drawing
     if (isDrawingLine && tempLineStart) {
       const filteredObjects = objects.filter(obj => obj.id !== 'temp-line-preview');
@@ -546,7 +904,12 @@ export function NoteEditorEnhanced() {
     }
 
     if (isDrawing) {
-      addToHistory(objects);
+      if (tool === 'eraser') {
+        // For eraser, save to history when done
+        addToHistory(objects);
+      } else {
+        addToHistory(objects);
+      }
     }
     setIsDrawing(false);
   };
@@ -635,6 +998,8 @@ export function NoteEditorEnhanced() {
   useEffect(() => {
     if (tool === 'pan' && stageRef.current) {
       stageRef.current.container().style.cursor = 'grab';
+    } else if (tool === 'eraser' && stageRef.current) {
+      stageRef.current.container().style.cursor = 'crosshair';
     } else if (stageRef.current) {
       stageRef.current.container().style.cursor = 'default';
     }
@@ -930,6 +1295,19 @@ export function NoteEditorEnhanced() {
               return null;
             })}
             {tool === 'select' && <Transformer ref={transformerRef} />}
+            
+            {/* Eraser cursor */}
+            {tool === 'eraser' && eraserCursor && (
+              <Circle
+                x={eraserCursor.x}
+                y={eraserCursor.y}
+                radius={10}
+                stroke={darkMode ? '#ffffff' : '#000000'}
+                strokeWidth={2}
+                dash={[5, 5]}
+                listening={false}
+              />
+            )}
           </Layer>
         </Stage>
 
