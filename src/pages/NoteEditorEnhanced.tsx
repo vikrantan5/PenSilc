@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Stage, Layer, Line, Rect, Circle, Text as KonvaText, Arrow, Transformer, Ellipse } from 'react-konva';
 import { useAuth } from '../contexts/AuthContext';
@@ -23,6 +23,10 @@ import {
   ZoomOut,
   Palette,
   Download,
+  Copy as CopyIcon,
+  Edit2,
+  Trash2,
+  Scissors,
 } from 'lucide-react';
 import Konva from 'konva';
 import {
@@ -30,13 +34,13 @@ import {
   getDefaultDrawingColor,
 } from '../utils/colorConversion';
 
-type Tool = 'pen' | 'highlighter' | 'text' | 'shape' | 'eraser' | 'select' | 'pan';
+type Tool = 'pen' | 'highlighter' | 'text' | 'shape' | 'eraser' | 'select' | 'pan' | 'copy';
 type ShapeType = 'rectangle' | 'circle' | 'triangle' | 'arrow' | 'line' | 'square' | 'ellipse';
 type TextAlign = 'left' | 'center' | 'right';
 
 interface DrawObject {
   id: string;
-  type: 'line' | 'rect' | 'circle' | 'text' | 'arrow' | 'triangle' | 'straightline' | 'ellipse';
+  type: 'line' | 'rect' | 'circle' | 'text' | 'arrow' | 'triangle' | 'straightline' | 'ellipse' | 'group';
   points?: number[];
   x?: number;
   y?: number;
@@ -58,6 +62,14 @@ interface DrawObject {
   draggable?: boolean;
   originalFill?: string;
   originalStroke?: string;
+  groupObjects?: DrawObject[];
+}
+
+interface SelectionArea {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 interface TextBox {
@@ -117,6 +129,18 @@ export function NoteEditorEnhanced() {
   // UI states
   const [showShapeMenu, setShowShapeMenu] = useState(false);
   const [showColorPicker, setShowColorPicker] = useState(false);
+  
+  // Copy mode states
+  const [isSelectingArea, setIsSelectingArea] = useState(false);
+  const [selectionStart, setSelectionStart] = useState<{ x: number; y: number } | null>(null);
+  const [selectionArea, setSelectionArea] = useState<SelectionArea | null>(null);
+  
+  // Action menu states
+  const [showActionMenu, setShowActionMenu] = useState(false);
+  const [actionMenuPosition, setActionMenuPosition] = useState({ x: 0, y: 0 });
+  
+  // Text editing state
+  const [editingTextId, setEditingTextId] = useState<string | null>(null);
   
   const stageRef = useRef<any>(null);
   const transformerRef = useRef<Konva.Transformer | null>(null);
@@ -404,6 +428,86 @@ export function NoteEditorEnhanced() {
     return Math.sqrt(Math.pow(point.x - projX, 2) + Math.pow(point.y - projY, 2));
   };
 
+  // Copy selected object (text or shape)
+  const copyObject = (objectId: string) => {
+    const objToCopy = objects.find(obj => obj.id === objectId);
+    if (!objToCopy) return;
+
+    const newObject: DrawObject = {
+      ...objToCopy,
+      id: `${objToCopy.type}-${Date.now()}`,
+      x: (objToCopy.x || 0) + 20,
+      y: (objToCopy.y || 0) + 20,
+      draggable: true,
+    };
+
+    const newObjects = [...objects, newObject];
+    setObjects(newObjects);
+    addToHistory(newObjects);
+    setSelectedId(newObject.id);
+    setShowActionMenu(false);
+  };
+
+  // Delete selected object
+  const deleteObject = (objectId: string) => {
+    const newObjects = objects.filter(obj => obj.id !== objectId);
+    setObjects(newObjects);
+    addToHistory(newObjects);
+    setSelectedId(null);
+    setShowActionMenu(false);
+  };
+
+  // Edit text object
+  const editText = (objectId: string) => {
+    const textObj = objects.find(obj => obj.id === objectId && obj.type === 'text');
+    if (!textObj) return;
+
+    setEditingTextId(objectId);
+    setTextValue(textObj.text || '');
+    setTextBox({
+      id: objectId,
+      x: textObj.x || 0,
+      y: textObj.y || 0,
+      width: textObj.width || 200,
+      height: (textObj.fontSize || 16) * 1.5,
+    });
+    setShowActionMenu(false);
+    setTimeout(() => textInputRef.current?.focus(), 100);
+  };
+
+  // Check if objects are within selection area
+  const isObjectInArea = (obj: DrawObject, area: SelectionArea): boolean => {
+    if (obj.type === 'line' && obj.points) {
+      // Check if any point of the line is within the area
+      for (let i = 0; i < obj.points.length; i += 2) {
+        const x = obj.points[i];
+        const y = obj.points[i + 1];
+        if (x >= area.x && x <= area.x + area.width && 
+            y >= area.y && y <= area.y + area.height) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    if (obj.x !== undefined && obj.y !== undefined) {
+      const objRight = obj.x + (obj.width || 0);
+      const objBottom = obj.y + (obj.height || 0);
+      const objCenterX = obj.x + (obj.width || 0) / 2;
+      const objCenterY = obj.y + (obj.height || 0) / 2;
+
+      // Check if object center is within area or if object overlaps with area
+      return (
+        (objCenterX >= area.x && objCenterX <= area.x + area.width &&
+         objCenterY >= area.y && objCenterY <= area.y + area.height) ||
+        (obj.x < area.x + area.width && objRight > area.x &&
+         obj.y < area.y + area.height && objBottom > area.y)
+      );
+    }
+
+    return false;
+  };
+
   const handleMouseDown = (e: any) => {
     const stage = e.target.getStage();
     const point = stage.getPointerPosition();
@@ -411,6 +515,9 @@ export function NoteEditorEnhanced() {
       x: (point.x - stagePos.x) / zoom,
       y: (point.y - stagePos.y) / zoom,
     };
+
+    // Hide action menu when clicking anywhere
+    setShowActionMenu(false);
 
     // Handle middle mouse button for panning
     if (e.evt.button === 1) {
@@ -458,10 +565,33 @@ export function NoteEditorEnhanced() {
       return;
     }
 
+    // Handle copy mode - area selection
+    if (tool === 'copy') {
+      setIsSelectingArea(true);
+      setSelectionStart(relativePoint);
+      setSelectionArea(null);
+      return;
+    }
+
     if (tool === 'select') {
       const clickedOnEmpty = e.target === e.target.getStage() || e.target.attrs.id === 'background';
       if (clickedOnEmpty) {
         setSelectedId(null);
+        setShowActionMenu(false);
+      } else {
+        // Show action menu for selected object
+        const clickedId = e.target.attrs.id;
+        if (clickedId && clickedId !== 'background') {
+          setSelectedId(clickedId);
+          const selectedObj = objects.find(obj => obj.id === clickedId);
+          if (selectedObj) {
+            // Position action menu near the object
+            const menuX = (selectedObj.x || 0) * zoom + stagePos.x + 50;
+            const menuY = (selectedObj.y || 0) * zoom + stagePos.y - 50;
+            setActionMenuPosition({ x: menuX, y: menuY });
+            setShowActionMenu(true);
+          }
+        }
       }
       return;
     }
@@ -542,6 +672,19 @@ export function NoteEditorEnhanced() {
       x: (point.x - stagePos.x) / zoom,
       y: (point.y - stagePos.y) / zoom,
     };
+
+    // Handle copy mode - draw selection area
+    if (isSelectingArea && selectionStart) {
+      const width = relativePoint.x - selectionStart.x;
+      const height = relativePoint.y - selectionStart.y;
+      setSelectionArea({
+        x: width > 0 ? selectionStart.x : relativePoint.x,
+        y: height > 0 ? selectionStart.y : relativePoint.y,
+        width: Math.abs(width),
+        height: Math.abs(height),
+      });
+      return;
+    }
 
     // Update eraser cursor position
     if (tool === 'eraser') {
@@ -749,6 +892,47 @@ export function NoteEditorEnhanced() {
       y: (point.y - stagePos.y) / zoom,
     };
 
+    // Complete area selection in copy mode
+    if (isSelectingArea && selectionStart && selectionArea) {
+      setIsSelectingArea(false);
+      setSelectionStart(null);
+
+      // Find all objects within the selection area
+      const selectedObjects = objects.filter(obj => isObjectInArea(obj, selectionArea));
+
+      if (selectedObjects.length > 0) {
+        // Create a group of copied objects with offset
+        const copiedObjects = selectedObjects.map(obj => ({
+          ...obj,
+          id: `${obj.type}-copy-${Date.now()}-${Math.random()}`,
+          x: (obj.x || 0) + 20,
+          y: (obj.y || 0) + 20,
+          draggable: true,
+        }));
+
+        // Create a group object
+        const groupObject: DrawObject = {
+          id: `group-${Date.now()}`,
+          type: 'group',
+          x: selectionArea.x + 20,
+          y: selectionArea.y + 20,
+          width: selectionArea.width,
+          height: selectionArea.height,
+          groupObjects: copiedObjects,
+          draggable: true,
+        };
+
+        const newObjects = [...objects, groupObject];
+        setObjects(newObjects);
+        addToHistory(newObjects);
+        setSelectedId(groupObject.id);
+        setTool('select');
+      }
+
+      setSelectionArea(null);
+      return;
+    }
+
     // Complete text box creation
     if (isDrawingTextBox && tempTextBoxStart) {
       setIsDrawingTextBox(false);
@@ -918,31 +1102,59 @@ export function NoteEditorEnhanced() {
     if (!textBox || !textValue.trim()) {
       setTextBox(null);
       setTextValue('');
+      setEditingTextId(null);
       return;
     }
 
-    const newText: DrawObject = {
-      id: `text-${Date.now()}`,
-      type: 'text',
-      x: textBox.x,
-      y: textBox.y,
-      text: textValue,
-      fontSize,
-      fontFamily,
-      fontStyle: 'normal',
-      textDecoration: '',
-      fill: color,
-      width: textBox.width,
-      align: 'left',
-      draggable: true,
-    };
+    if (editingTextId) {
+      // Update existing text
+      const newObjects = objects.map(obj => {
+        if (obj.id === editingTextId) {
+          return { ...obj, text: textValue };
+        }
+        return obj;
+      });
+      setObjects(newObjects);
+      addToHistory(newObjects);
+      setEditingTextId(null);
+    } else {
+      // Create new text
+      const newText: DrawObject = {
+        id: `text-${Date.now()}`,
+        type: 'text',
+        x: textBox.x,
+        y: textBox.y,
+        text: textValue,
+        fontSize,
+        fontFamily,
+        fontStyle: 'normal',
+        textDecoration: '',
+        fill: color,
+        width: textBox.width,
+        align: 'left',
+        draggable: true,
+      };
 
-    const newObjects = [...objects, newText];
-    setObjects(newObjects);
-    addToHistory(newObjects);
+      const newObjects = [...objects, newText];
+      setObjects(newObjects);
+      addToHistory(newObjects);
+    }
+
     setTextBox(null);
     setTextValue('');
     setTool('select');
+  };
+
+  const handleTextKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleTextBoxComplete();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setTextBox(null);
+      setTextValue('');
+      setEditingTextId(null);
+    }
   };
 
   const handleShare = async () => {
@@ -1004,6 +1216,21 @@ export function NoteEditorEnhanced() {
       stageRef.current.container().style.cursor = 'default';
     }
   }, [tool]);
+
+  // Handle keyboard shortcuts - Delete selected object with Backspace
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Backspace' && selectedId && !textBox) {
+        e.preventDefault();
+        deleteObject(selectedId);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [selectedId, textBox]);
 
   const bgColor = darkMode ? 'bg-gray-900' : 'bg-gray-50';
   const cardBg = darkMode ? 'bg-gray-800' : 'bg-white';
@@ -1292,9 +1519,121 @@ export function NoteEditorEnhanced() {
                   />
                 );
               }
+              if (obj.type === 'group' && obj.groupObjects) {
+                // Render group as a container with all its objects
+                return (
+                  <React.Fragment key={obj.id}>
+                    {obj.groupObjects.map((groupObj) => {
+                      const adjustedObj = {
+                        ...groupObj,
+                        x: (groupObj.x || 0) + (obj.x || 0) - 20,
+                        y: (groupObj.y || 0) + (obj.y || 0) - 20,
+                      };
+                      
+                      if (groupObj.type === 'line' && groupObj.points) {
+                        return (
+                          <Line
+                            key={groupObj.id}
+                            id={groupObj.id}
+                            points={groupObj.points}
+                            stroke={groupObj.stroke}
+                            strokeWidth={groupObj.strokeWidth}
+                            opacity={groupObj.opacity}
+                            lineCap="round"
+                            lineJoin="round"
+                            tension={0.5}
+                          />
+                        );
+                      }
+                      if (groupObj.type === 'rect') {
+                        return (
+                          <Rect
+                            key={groupObj.id}
+                            id={groupObj.id}
+                            x={adjustedObj.x}
+                            y={adjustedObj.y}
+                            width={groupObj.width}
+                            height={groupObj.height}
+                            stroke={groupObj.stroke}
+                            strokeWidth={groupObj.strokeWidth}
+                            fill={groupObj.fill}
+                          />
+                        );
+                      }
+                      if (groupObj.type === 'circle') {
+                        return (
+                          <Circle
+                            key={groupObj.id}
+                            id={groupObj.id}
+                            x={adjustedObj.x}
+                            y={adjustedObj.y}
+                            radius={groupObj.radius}
+                            stroke={groupObj.stroke}
+                            strokeWidth={groupObj.strokeWidth}
+                            fill={groupObj.fill}
+                          />
+                        );
+                      }
+                      if (groupObj.type === 'text') {
+                        return (
+                          <KonvaText
+                            key={groupObj.id}
+                            id={groupObj.id}
+                            x={adjustedObj.x}
+                            y={adjustedObj.y}
+                            text={groupObj.text}
+                            fontSize={groupObj.fontSize}
+                            fontFamily={groupObj.fontFamily}
+                            fill={groupObj.fill}
+                            width={groupObj.width}
+                          />
+                        );
+                      }
+                      return null;
+                    })}
+                    <Rect
+                      id={obj.id}
+                      x={obj.x}
+                      y={obj.y}
+                      width={obj.width}
+                      height={obj.height}
+                      stroke="transparent"
+                      strokeWidth={0}
+                      fill="transparent"
+                      draggable={true}
+                      onClick={() => tool === 'select' && setSelectedId(obj.id)}
+                      onDragEnd={(e) => {
+                        const newObjects = objects.map(o => {
+                          if (o.id === obj.id) {
+                            return { ...o, x: e.target.x(), y: e.target.y() };
+                          }
+                          return o;
+                        });
+                        setObjects(newObjects);
+                        addToHistory(newObjects);
+                      }}
+                    />
+                  </React.Fragment>
+                );
+              }
               return null;
             })}
             {tool === 'select' && <Transformer ref={transformerRef} />}
+            
+            {/* Selection area for copy mode */}
+            {selectionArea && tool === 'copy' && (
+              <Rect
+                x={selectionArea.x}
+                y={selectionArea.y}
+                width={selectionArea.width}
+                height={selectionArea.height}
+                stroke="#FFD700"
+                strokeWidth={2}
+                dash={[10, 5]}
+                fill="rgba(255, 215, 0, 0.1)"
+                listening={false}
+              />
+            )}
             
             {/* Eraser cursor */}
             {tool === 'eraser' && eraserCursor && (
@@ -1311,7 +1650,7 @@ export function NoteEditorEnhanced() {
           </Layer>
         </Stage>
 
-        {/* Dotted Text Box Overlay */}
+        {/* Text Input Overlay (No Save/Cancel buttons - Auto-save on Enter) */}
         {textBox && (
           <div
             className="absolute border-2 border-dashed border-blue-500 bg-blue-50 bg-opacity-20 p-2"
@@ -1327,34 +1666,54 @@ export function NoteEditorEnhanced() {
               ref={textInputRef}
               value={textValue}
               onChange={(e) => setTextValue(e.target.value)}
+              onKeyDown={handleTextKeyDown}
               className="w-full h-full bg-transparent border-none outline-none resize-none text-black"
               style={{
                 fontSize: `${fontSize}px`,
                 fontFamily,
                 color,
               }}
-              placeholder="Type your text here..."
+              placeholder="Type text... (Enter to save, ESC to cancel)"
               data-testid="text-input"
             />
-            <div className="absolute bottom-0 right-0 flex space-x-2 p-2 bg-white rounded-tl shadow">
+          </div>
+        )}
+
+        {/* Action Menu for Selected Objects - Icon Only */}
+        {showActionMenu && selectedId && (
+          <div
+            className="absolute z-50 bg-white rounded-lg shadow-xl border border-gray-200 p-1 flex space-x-1"
+            style={{
+              left: actionMenuPosition.x,
+              top: actionMenuPosition.y,
+            }}
+          >
+            {objects.find(obj => obj.id === selectedId)?.type === 'text' && (
               <button
-                onClick={() => {
-                  setTextBox(null);
-                  setTextValue('');
-                }}
-                className="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-50"
-                data-testid="text-cancel"
+                onClick={() => editText(selectedId)}
+                className="p-2 rounded-lg hover:bg-blue-50 text-blue-600 transition"
+                title="Edit"
+                data-testid="action-edit"
               >
-                Cancel
+                <Edit2 className="w-5 h-5" />
               </button>
-              <button
-                onClick={handleTextBoxComplete}
-                className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
-                data-testid="text-done"
-              >
-                Done
-              </button>
-            </div>
+            )}
+            <button
+              onClick={() => copyObject(selectedId)}
+              className="p-2 rounded-lg hover:bg-green-50 text-green-600 transition"
+              title="Copy"
+              data-testid="action-copy"
+            >
+              <CopyIcon className="w-5 h-5" />
+            </button>
+            <button
+              onClick={() => deleteObject(selectedId)}
+              className="p-2 rounded-lg hover:bg-red-50 text-red-600 transition"
+              title="Delete (Backspace)"
+              data-testid="action-delete"
+            >
+              <Trash2 className="w-5 h-5" />
+            </button>
           </div>
         )}
       </div>
@@ -1410,6 +1769,18 @@ export function NoteEditorEnhanced() {
             data-testid="text-tool"
           >
             <Type className="w-5 h-5" />
+          </button>
+
+          {/* Copy Area Tool */}
+          <button
+            onClick={() => setTool('copy')}
+            className={`p-2 rounded-lg transition ${
+              tool === 'copy' ? 'bg-blue-500 text-white' : `${hoverBg} ${secondaryText}`
+            }`}
+            title="Copy Area"
+            data-testid="copy-area-tool"
+          >
+            <Scissors className="w-5 h-5" />
           </button>
 
           {/* Shapes */}
