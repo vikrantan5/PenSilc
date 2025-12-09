@@ -117,7 +117,7 @@ export function Dashboard() {
               <div className="bg-blue-600 p-2 rounded-lg">
                 <BookOpen className="w-6 h-6 text-white" />
               </div>
-              <h1 className="text-xl font-bold text-gray-900"></h1>
+              <h1 className="text-xl font-bold text-gray-900">PenSilc</h1>
             </div>
             <button
               onClick={handleSignOut}
