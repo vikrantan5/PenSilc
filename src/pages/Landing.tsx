@@ -11,7 +11,7 @@ export function Landing() {
               <div className="bg-blue-600 p-2 rounded-lg">
                 <PenTool className="w-6 h-6 text-white" />
               </div>
-              <span className="text-xl font-bold text-gray-900">Notes Maker</span>
+              <span className="text-xl font-bold text-gray-900">PenSilc</span>
             </div>
             <div className="flex space-x-4">
               <Link
@@ -40,7 +40,7 @@ export function Landing() {
               <span className="text-blue-600">Anywhere, Anytime</span>
             </h1>
             <p className="text-xl text-gray-600 mb-8 max-w-2xl mx-auto">
-              A powerful notes maker with drawing tools, text formatting, shapes, and easy sharing.
+              A powerful PenSilc with drawing tools, text formatting, shapes, and easy sharing.
               Organize your thoughts and ideas with style.
             </p>
             <div className="flex justify-center space-x-4">
@@ -123,7 +123,7 @@ export function Landing() {
       <footer className="bg-gray-50 border-t border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="text-center text-gray-600">
-            <p>&copy; 2024 Notes Maker. All rights reserved.</p>
+            <p>&copy; 2024 PenSilc. All rights reserved.</p>
           </div>
         </div>
       </footer>

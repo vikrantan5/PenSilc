@@ -1,8 +1,8 @@
 /*
-  # Notes Maker Database Schema
+  # PenSilc Database Schema
 
   ## Overview
-  Complete database schema for the Notes Maker application with subjects, notes, and sharing functionality.
+  Complete database schema for the PenSilc application with subjects, notes, and sharing functionality.
 
   ## New Tables
   
